@@ -1,0 +1,159 @@
+// CanvasTool (canvas + dialog). Area model / lattice (Napier's) multiplication.
+//
+// Ported from maths-whiteboard.html:
+//   - objSize case 'arealattice'  (line 209)
+//   - drawArealattice + drawLattice (lines 249-250)
+//   - areaLatticeDialog            (lines 450-458)
+
+import { defineCanvasTool } from "@/tools/registry";
+import { partition, fillPanel } from "@/canvas/drawHelpers";
+import { AreaLatticeDialog } from "@/tools/arealattice/Dialog";
+
+export interface AreaLatticeParams {
+  mode: "area" | "lattice";
+  a: number;
+  b: number;
+  fill: boolean;
+}
+
+export default defineCanvasTool<AreaLatticeParams>({
+  kind: "canvas",
+  type: "arealattice",
+  name: "Area / lattice",
+  blurb: "rectangle / Napier",
+  category: "number",
+
+  defaults: () => ({ mode: "area", a: 23, b: 14, fill: false }),
+
+  size: (p) => {
+    if (p.mode === "lattice") {
+      const n = String(p.a).length,
+        m = String(p.b).length,
+        cell = 46;
+      return { w: cell + n * cell + 30, h: 26 + m * cell + 30 };
+    }
+    return { w: 430, h: 210 };
+  },
+
+  draw: ({ ctx, theme, font }, o) => {
+    if (o.mode === "lattice") {
+      // drawLattice
+      const aS = String(o.a),
+        bS = String(o.b),
+        n = aS.length,
+        m = bS.length,
+        cell = 46;
+      const gx = o.x + cell,
+        gy = o.y + 26;
+      ctx.save();
+      fillPanel(ctx, o);
+      ctx.font = "700 17px " + font;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = theme.lineInk;
+      for (let c = 0; c < n; c++)
+        ctx.fillText(aS[c], gx + c * cell + cell / 2, o.y + 13);
+      for (let r = 0; r < m; r++)
+        ctx.fillText(bS[r], gx + n * cell + 16, gy + r * cell + cell / 2);
+      for (let r = 0; r < m; r++)
+        for (let c = 0; c < n; c++) {
+          const x = gx + c * cell,
+            y = gy + r * cell;
+          ctx.strokeStyle = "#C3D4D2";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x, y, cell, cell);
+          ctx.strokeStyle = "#9DB6B4";
+          ctx.beginPath();
+          ctx.moveTo(x + cell, y);
+          ctx.lineTo(x, y + cell);
+          ctx.stroke();
+          if (o.fill) {
+            const p = +aS[c] * +bS[r];
+            const tens = Math.floor(p / 10),
+              ones = p % 10;
+            ctx.fillStyle = theme.lineInk;
+            ctx.font = "600 15px " + font;
+            ctx.fillText(String(tens), x + cell * 0.32, y + cell * 0.32);
+            ctx.fillText(String(ones), x + cell * 0.68, y + cell * 0.7);
+          }
+        }
+      ctx.strokeStyle = theme.lineInk;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(gx, gy, n * cell, m * cell);
+      ctx.restore();
+      return;
+    }
+
+    // drawArealattice (area model)
+    const A = partition(o.a),
+      B = partition(o.b);
+    const leftW = 44,
+      topH = 26,
+      rectX = o.x + leftW,
+      rectY = o.y + topH,
+      rectW = o.w - leftW,
+      rectH = o.h - topH;
+    const tA = A.reduce((s, v) => s + v, 0),
+      tB = B.reduce((s, v) => s + v, 0);
+    const colX = [rectX];
+    let cx = rectX;
+    A.forEach((v) => {
+      cx += (v / tA) * rectW;
+      colX.push(cx);
+    });
+    const rowY = [rectY];
+    let cy = rectY;
+    B.forEach((v) => {
+      cy += (v / tB) * rectH;
+      rowY.push(cy);
+    });
+    ctx.save();
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(rectX, rectY, rectW, rectH);
+    ctx.font = "600 16px " + font;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (let r = 0; r < B.length; r++)
+      for (let c = 0; c < A.length; c++) {
+        ctx.strokeStyle = "#C3D4D2";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(
+          colX[c],
+          rowY[r],
+          colX[c + 1] - colX[c],
+          rowY[r + 1] - rowY[r],
+        );
+        if (o.fill) {
+          ctx.fillStyle = theme.lineInk;
+          ctx.fillText(
+            String(A[c] * B[r]),
+            (colX[c] + colX[c + 1]) / 2,
+            (rowY[r] + rowY[r + 1]) / 2,
+          );
+        }
+      }
+    ctx.strokeStyle = theme.lineInk;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(rectX, rectY, rectW, rectH);
+    ctx.fillStyle = theme.lineInk;
+    ctx.font = "700 16px " + font;
+    for (let c = 0; c < A.length; c++)
+      ctx.fillText("×" + A[c], (colX[c] + colX[c + 1]) / 2, o.y + topH / 2);
+    for (let r = 0; r < B.length; r++)
+      ctx.fillText(String(B[r]), o.x + leftW / 2, (rowY[r] + rowY[r + 1]) / 2);
+    ctx.font = "600 13px " + font;
+    ctx.fillStyle = theme.muted;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(
+      o.fill
+        ? o.a + " × " + o.b + " = " + o.a * o.b
+        : o.a + " × " + o.b,
+      o.x,
+      o.y - 7,
+    );
+    ctx.restore();
+  },
+
+  Dialog: AreaLatticeDialog,
+});

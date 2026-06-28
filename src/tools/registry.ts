@@ -1,0 +1,147 @@
+// THE TOOL CONTRACT.
+//
+// Every maths widget is a Tool registered here. A Tool is either:
+//   - a CanvasTool: drawn directly onto the board canvas via draw(kit, obj).
+//   - a WidgetTool: rendered as an interactive React component overlaid on the
+//     board (e.g. the type-and-check worksheet); reads/updates via the store.
+//
+// Tool authors copy src/tools/numberline (canvas + dialog) or src/tools/text
+// (canvas, no dialog) as templates. They DO NOT register globally themselves --
+// the Assembly phase owns src/tools/index.ts and calls registerTool for each.
+
+import type React from "react";
+import type { Theme } from "@/styles/theme";
+import type { BoardObjectBase } from "@/board/types";
+
+// --- gallery taxonomy -----------------------------------------------------
+
+export type ToolCategory =
+  | "number"
+  | "practice"
+  | "fractions"
+  | "geometry"
+  | "time"
+  | "word";
+
+/** Display order of category sections in the Insert gallery. */
+export const CATEGORY_ORDER: ToolCategory[] = [
+  "number",
+  "practice",
+  "fractions",
+  "geometry",
+  "time",
+  "word",
+];
+
+/** Section headings, matching the prototype gallery exactly. */
+export const CATEGORY_LABELS: Record<ToolCategory, string> = {
+  number: "Number & calculating",
+  practice: "Practice — type & check",
+  fractions: "Fractions, decimals & %",
+  geometry: "Geometry",
+  time: "Time",
+  word: "Word problems",
+};
+
+// --- draw + dialog contracts ----------------------------------------------
+
+/** Everything a canvas draw() needs. The camera transform is already applied. */
+export interface DrawKit {
+  ctx: CanvasRenderingContext2D;
+  theme: Theme;
+  font: string;
+}
+
+/**
+ * Props every tool Dialog receives.
+ *   initial   present  -> EDIT an existing object; buttons read "Save"/"Cancel".
+ *             absent   -> CREATE a new object;     buttons read "Add to board"/"Back".
+ *   onSubmit(params)   -> validated params; host places (create) or updates (edit).
+ *   onCancel()         -> close without changes (edit) / return to gallery (create).
+ */
+export interface ToolDialogProps<P> {
+  initial?: P;
+  onSubmit: (params: P) => void;
+  onCancel: () => void;
+}
+
+/** Shared metadata for both kinds of tool. */
+export interface ToolMeta {
+  type: string;
+  name: string;
+  blurb: string;
+  category: ToolCategory;
+  /** Show in the Insert gallery? Defaults to true; set false for e.g. free text. */
+  inGallery?: boolean;
+}
+
+/** A tool drawn onto the board canvas. */
+export interface CanvasTool<P = Record<string, unknown>> extends ToolMeta {
+  kind: "canvas";
+  /** Initial params for a freshly created object. */
+  defaults: () => P;
+  /** Bounding-box size for given params. */
+  size: (p: P) => { w: number; h: number };
+  /** Render the object. ctx is already camera-transformed (world space). */
+  draw: (kit: DrawKit, obj: BoardObjectBase & P) => void;
+  /** Optional settings dialog. Omit for click-to-place tools (e.g. text). */
+  Dialog?: React.FC<ToolDialogProps<P>>;
+}
+
+/** Props an interactive widget component receives. */
+export interface WidgetProps<P> {
+  // The widget reads/updates its object via the store directly (useBoardStore).
+  obj: BoardObjectBase & P;
+  /**
+   * Open this widget's settings Dialog (EDIT flow). Provided by the host via
+   * the WidgetLayer, mirroring BoardCanvas's onEditObject for canvas objects.
+   * Routes through the same App modal/edit pipeline as the toolbar/double-click.
+   */
+  onEdit?: () => void;
+}
+
+/** A tool rendered as an interactive React overlay. */
+export interface WidgetTool<P = Record<string, unknown>> extends ToolMeta {
+  kind: "widget";
+  defaults: () => P;
+  defaultSize: { w: number; h: number };
+  Component: React.FC<WidgetProps<P>>;
+  Dialog?: React.FC<ToolDialogProps<P>>;
+}
+
+export type Tool = CanvasTool<any> | WidgetTool<any>;
+
+// Identity helpers that give tool authors full type inference on P.
+export function defineCanvasTool<P>(t: CanvasTool<P>): CanvasTool<P> {
+  return t;
+}
+export function defineWidgetTool<P>(t: WidgetTool<P>): WidgetTool<P> {
+  return t;
+}
+
+// --- the registry ---------------------------------------------------------
+
+const REGISTRY = new Map<string, Tool>();
+
+/** Register a tool by its `type`. Throws on duplicate type. */
+export function registerTool(t: Tool): void {
+  if (REGISTRY.has(t.type)) {
+    throw new Error(`Tool type "${t.type}" is already registered.`);
+  }
+  REGISTRY.set(t.type, t);
+}
+
+export function getTool(type: string): Tool | undefined {
+  return REGISTRY.get(type);
+}
+
+export function listTools(): Tool[] {
+  return [...REGISTRY.values()];
+}
+
+/** Gallery-visible tools for a category, in registration order. */
+export function listByCategory(category: ToolCategory): Tool[] {
+  return listTools().filter(
+    (t) => t.category === category && t.inGallery !== false,
+  );
+}

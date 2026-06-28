@@ -1,0 +1,100 @@
+// CanvasTool (canvas + dialog). Times tables: a full multiplication grid, or a
+// single table to practise.
+//
+// Ported from maths-whiteboard.html:
+//   - size:   objSize 'timestable' case (line 204).
+//   - draw:   drawTimesTable (line 239).
+//   - dialog: timesDialog (lines 404-412) -> ./Dialog.tsx.
+//
+// Mechanical transformations only: tctx -> ctx; css("--line-ink") ->
+// theme.lineInk, css("--accent-soft") -> theme.accentSoft; FONT -> font;
+// fillPanel(o) -> fillPanel(ctx, o). Literal hex (#C3D4D2) stays literal. All
+// numeric constants, offsets and branching are identical to the original.
+
+import { defineCanvasTool } from "@/tools/registry";
+import { fillPanel } from "@/canvas/drawHelpers";
+import { TimesTableDialog } from "@/tools/timestable/Dialog";
+
+export type TimesTableParams =
+  | { mode: "grid"; n: number; fill: boolean }
+  | { mode: "single"; k: number; rows: number; fill: boolean };
+
+export const timesTableTool = defineCanvasTool<TimesTableParams>({
+  kind: "canvas",
+  type: "timestable",
+  name: "Times tables",
+  blurb: "full grid or one table",
+  category: "number",
+
+  defaults: () => ({ mode: "grid", n: 12, fill: false }),
+
+  size: (p) => {
+    if (p.mode === "single") return { w: 240, h: p.rows * 34 };
+    return { w: (p.n + 1) * 40, h: (p.n + 1) * 40 };
+  },
+
+  draw: ({ ctx, theme, font }, o) => {
+    ctx.save();
+    fillPanel(ctx, o);
+    ctx.textBaseline = "middle";
+    if (o.mode === "single") {
+      const k = o.k,
+        rows = o.rows,
+        rowH = 34,
+        w = o.w;
+      ctx.font = "600 18px " + font;
+      for (let i = 1; i <= rows; i++) {
+        const y = o.y + (i - 1) * rowH;
+        ctx.textAlign = "right";
+        ctx.fillStyle = theme.lineInk;
+        ctx.fillText(i + " × " + k + " =", o.x + w * 0.6, y + rowH / 2);
+        const bx = o.x + w * 0.64,
+          bw = w * 0.32,
+          by = y + 5,
+          bh = rowH - 10;
+        ctx.strokeStyle = "#C3D4D2";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(bx, by, bw, bh);
+        if (o.fill) {
+          ctx.textAlign = "center";
+          ctx.fillText(String(i * k), bx + bw / 2, y + rowH / 2);
+        }
+      }
+      ctx.restore();
+      return;
+    }
+    const n = o.n,
+      cell = 40;
+    ctx.font = "600 17px " + font;
+    ctx.textAlign = "center";
+    for (let r = 0; r <= n; r++)
+      for (let c = 0; c <= n; c++) {
+        const cx = o.x + c * cell,
+          cy = o.y + r * cell;
+        if (r === 0 || c === 0) {
+          ctx.fillStyle = theme.accentSoft;
+          ctx.fillRect(cx, cy, cell, cell);
+        }
+        ctx.strokeStyle = "#C3D4D2";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx, cy, cell, cell);
+        let t = "";
+        if (r === 0 && c === 0) t = "×";
+        else if (r === 0) t = String(c);
+        else if (c === 0) t = String(r);
+        else if (o.fill) t = String(r * c);
+        if (t) {
+          ctx.fillStyle = theme.lineInk;
+          ctx.fillText(t, cx + cell / 2, cy + cell / 2 + 1);
+        }
+      }
+    ctx.strokeStyle = theme.lineInk;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(o.x, o.y, (n + 1) * cell, (n + 1) * cell);
+    ctx.restore();
+  },
+
+  Dialog: TimesTableDialog,
+});
+
+export default timesTableTool;
