@@ -144,6 +144,15 @@ interface BoardState {
    */
   moveObject(id: string, x: number, y: number): void;
   /**
+   * Resize an object to a new box (x/y/w/h). Does NOT push history -- the resize
+   * handler pushes once at drag start so the whole resize collapses to a single
+   * undo step (mirrors moveObject).
+   */
+  resizeObject(
+    id: string,
+    rect: { x: number; y: number; w: number; h: number },
+  ): void;
+  /**
    * Translate every selected object and stroke by (dx, dy) in world coords.
    * Does NOT push history -- the drag handler pushes once at drag start so the
    * whole drag collapses to a single undo step (mirrors moveObject).
@@ -350,6 +359,14 @@ export const useBoardStore = create<BoardState>((set, get) => {
       commit((d) => ({
         ...d,
         objects: d.objects.map((o) => (o.id === id ? { ...o, x, y } : o)),
+      }));
+    },
+
+    resizeObject(id, rect) {
+      // No history here -- caller pushed once at drag start (mirrors moveObject).
+      commit((d) => ({
+        ...d,
+        objects: d.objects.map((o) => (o.id === id ? { ...o, ...rect } : o)),
       }));
     },
 
