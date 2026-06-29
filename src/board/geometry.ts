@@ -48,6 +48,70 @@ export const hitTest = (
   return null;
 };
 
+// --- resize handles -------------------------------------------------------
+// A selected object exposes 8 drag handles (4 corners + 4 edge midpoints) on
+// the padded selection box. Corners resize both axes; edges resize one. Handle
+// geometry is computed in world space here; the canvas converts to screen for
+// constant on-screen size and hit-testing.
+
+export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+
+export const RESIZE_HANDLES: ResizeHandle[] = [
+  "nw",
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w",
+];
+
+/** World-space centre of each resize handle on an object's padded box. */
+export const handleCenters = (
+  o: { x: number; y: number; w: number; h: number },
+  pad: number,
+): Record<ResizeHandle, { x: number; y: number }> => {
+  const l = o.x - pad;
+  const r = o.x + o.w + pad;
+  const t = o.y - pad;
+  const b = o.y + o.h + pad;
+  const mx = o.x + o.w / 2;
+  const my = o.y + o.h / 2;
+  return {
+    nw: { x: l, y: t },
+    n: { x: mx, y: t },
+    ne: { x: r, y: t },
+    e: { x: r, y: my },
+    se: { x: r, y: b },
+    s: { x: mx, y: b },
+    sw: { x: l, y: b },
+    w: { x: l, y: my },
+  };
+};
+
+/**
+ * Which resize handle (if any) is within `slop` screen px of the screen point.
+ * pad/slop are passed so the caller controls both the box inset (world px) and
+ * the click tolerance (screen px).
+ */
+export const hitTestHandle = (
+  cam: Camera,
+  o: { x: number; y: number; w: number; h: number },
+  sx: number,
+  sy: number,
+  pad: number,
+  slop: number,
+): ResizeHandle | null => {
+  const centers = handleCenters(o, pad);
+  for (const h of RESIZE_HANDLES) {
+    const c = centers[h];
+    const s = worldToScreen(cam, c.x, c.y);
+    if (Math.abs(s.x - sx) <= slop && Math.abs(s.y - sy) <= slop) return h;
+  }
+  return null;
+};
+
 // --- stroke geometry (selecting / moving freehand "arcs") -----------------
 
 /** Shortest distance from point (px,py) to the segment a->b. */

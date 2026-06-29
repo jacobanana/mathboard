@@ -29,9 +29,13 @@ import {
   objectInRect,
   strokeInRect,
   screenToWorld,
+  handleCenters,
+  hitTestHandle,
+  RESIZE_HANDLES,
   MIN_SCALE,
   MAX_SCALE,
 } from "@/board/geometry";
+import type { ResizeHandle } from "@/board/geometry";
 import { drawGrid, drawStrokeFull, FONT, textSizeOf } from "@/canvas/drawHelpers";
 import { getTool } from "@/tools/registry";
 import { theme } from "@/styles/theme";
@@ -39,6 +43,22 @@ import type { AnyBoardObject, Camera, Stroke } from "@/board/types";
 import { id as newId } from "@/board/types";
 
 const ERASER = 30;
+
+/** Resize-handle hit tolerance (screen px) and minimum object size (world px). */
+const HANDLE_SLOP = 12;
+const MIN_OBJ = 24;
+
+/** Pointer cursor per resize handle. */
+const RESIZE_CURSOR: Record<ResizeHandle, string> = {
+  nw: "nwse-resize",
+  se: "nwse-resize",
+  ne: "nesw-resize",
+  sw: "nesw-resize",
+  n: "ns-resize",
+  s: "ns-resize",
+  e: "ew-resize",
+  w: "ew-resize",
+};
 
 export interface BoardCanvasProps {
   /**
@@ -72,6 +92,19 @@ interface Moving {
    * that item on release (Figma-style). Null otherwise.
    */
   collapse: { kind: "object" | "stroke"; id: string } | null;
+}
+/** A drag on a resize handle of the single selected canvas object. */
+interface Resizing {
+  pid: number;
+  id: string;
+  handle: ResizeHandle;
+  /** The object's box at drag start; the new box is derived from it. */
+  ox: number;
+  oy: number;
+  ow: number;
+  oh: number;
+  /** True once the box actually changed (gates the single history push). */
+  moved: boolean;
 }
 /** A rubber-band area ("lasso") selection drag, in world coords. */
 interface Lasso {
@@ -124,6 +157,63 @@ const toggleSelection = (
 const isInSelection = (sel: Selection, kind: HitKind, id: string): boolean =>
   (kind === "stroke" ? sel.strokeIds : sel.objectIds).includes(id);
 
+/**
+ * The lone canvas object eligible for resize handles: exactly one object (and no
+ * strokes) selected, and its tool draws onto the canvas. Widgets render as HTML
+ * overlays above the canvas, so their handles would be occluded -- skip them.
+ */
+function singleResizableObject(
+  objects: AnyBoardObject[],
+  selection: Selection,
+): AnyBoardObject | null {
+  if (selection.objectIds.length !== 1 || selection.strokeIds.length !== 0) {
+    return null;
+  }
+  const o = objects.find((x) => x.id === selection.objectIds[0]);
+  if (!o) return null;
+  const t = getTool(o.type);
+  return t && t.kind === "canvas" ? o : null;
+}
+
+/**
+ * New box for an object whose `handle` is dragged to world point (wx, wy). The
+ * opposite edge(s) stay anchored; each moving edge is clamped to keep at least
+ * MIN_OBJ on its axis. With `aspect` (Shift on a corner) the box keeps its
+ * original w:h ratio, growing on the axis the pointer moved furthest.
+ */
+function resizeRect(
+  o: { x: number; y: number; w: number; h: number },
+  handle: ResizeHandle,
+  wx: number,
+  wy: number,
+  aspect: boolean,
+): { x: number; y: number; w: number; h: number } {
+  let l = o.x;
+  let t = o.y;
+  let r = o.x + o.w;
+  let b = o.y + o.h;
+  const left = handle.includes("w");
+  const right = handle.includes("e");
+  const top = handle.includes("n");
+  const bottom = handle.includes("s");
+  if (left) l = Math.min(wx, r - MIN_OBJ);
+  if (right) r = Math.max(wx, l + MIN_OBJ);
+  if (top) t = Math.min(wy, b - MIN_OBJ);
+  if (bottom) b = Math.max(wy, t + MIN_OBJ);
+  if (aspect && (left || right) && (top || bottom) && o.h > 0) {
+    const ar = o.w / o.h;
+    let w = r - l;
+    let h = b - t;
+    if (w / ar >= h) h = w / ar;
+    else w = h * ar;
+    if (left) l = r - w;
+    else r = l + w;
+    if (top) t = b - h;
+    else b = t + h;
+  }
+  return { x: l, y: t, w: r - l, h: b - t };
+}
+
 export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
   const tCanvasRef = useRef<HTMLCanvasElement>(null);
   const iCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -136,6 +226,7 @@ export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const strokeRef = useRef<LiveStroke | null>(null);
   const movingRef = useRef<Moving | null>(null);
+  const resizingRef = useRef<Resizing | null>(null);
   const lassoRef = useRef<Lasso | null>(null);
   const panningRef = useRef<Panning | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
@@ -216,6 +307,24 @@ export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
         }
       }
       tctx.restore();
+
+      // Resize handles for a single selected canvas object (constant on-screen
+      // size). Drawn on the same padded box as the selection outline.
+      const rz = singleResizableObject(board.objects, selection);
+      if (rz) {
+        const hs = 5 / camera.scale;
+        const centers = handleCenters(rz, pad);
+        tctx.save();
+        tctx.fillStyle = theme.accent;
+        tctx.strokeStyle = theme.paper;
+        tctx.lineWidth = 1.5 / camera.scale;
+        for (const hid of RESIZE_HANDLES) {
+          const c = centers[hid];
+          tctx.fillRect(c.x - hs, c.y - hs, hs * 2, hs * 2);
+          tctx.strokeRect(c.x - hs, c.y - hs, hs * 2, hs * 2);
+        }
+        tctx.restore();
+      }
 
       const lr = lassoRef.current;
       if (lr) {
@@ -418,6 +527,7 @@ export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
           renderInk();
         }
         movingRef.current = null;
+        resizingRef.current = null;
         if (lassoRef.current) {
           lassoRef.current = null;
           renderBack();
@@ -473,6 +583,33 @@ export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
         };
         renderInk();
       } else if (tool === "select") {
+        // A press on a resize handle of the single selected canvas object starts
+        // a resize and wins over move / lasso.
+        const rz = singleResizableObject(st.board.objects, st.selection);
+        if (rz) {
+          const handle = hitTestHandle(
+            camera,
+            rz,
+            pp.x,
+            pp.y,
+            8 / camera.scale,
+            HANDLE_SLOP,
+          );
+          if (handle) {
+            resizingRef.current = {
+              pid: e.pointerId,
+              id: rz.id,
+              handle,
+              ox: rz.x,
+              oy: rz.y,
+              ow: rz.w,
+              oh: rz.h,
+              moved: false,
+            };
+            e.preventDefault();
+            return;
+          }
+        }
         // Strokes ("arcs") sit visually above objects on the ink layer, so a
         // click on a stroke line wins; otherwise fall back to object boxes.
         const stroke = hitTestStroke(st.board.strokes, w.x, w.y);
@@ -527,6 +664,34 @@ export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      // Hover feedback: show a resize cursor over the selected object's handles
+      // while idle. Runs before the capture guard because a bare hover (no
+      // button) is never tracked in `pointers`.
+      const anyActive =
+        strokeRef.current ||
+        movingRef.current ||
+        resizingRef.current ||
+        lassoRef.current ||
+        panningRef.current ||
+        gestureRef.current;
+      if (!anyActive) {
+        const sh = store.getState();
+        if (sh.tool === "select") {
+          const pp0 = evPos(e);
+          const rz = singleResizableObject(sh.board.objects, sh.selection);
+          const h = rz
+            ? hitTestHandle(
+                sh.camera,
+                rz,
+                pp0.x,
+                pp0.y,
+                8 / sh.camera.scale,
+                HANDLE_SLOP,
+              )
+            : null;
+          iCanvas.style.cursor = h ? RESIZE_CURSOR[h] : "default";
+        }
+      }
       if (!pointers.current.has(e.pointerId)) return;
       const pp = evPos(e);
       pointers.current.set(e.pointerId, pp);
@@ -541,12 +706,37 @@ export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
 
       const stroke = strokeRef.current;
       const moving = movingRef.current;
+      const resizing = resizingRef.current;
       const lasso = lassoRef.current;
       const panning = panningRef.current;
 
       if (stroke && e.pointerId === stroke.pid) {
         stroke.points.push(screenToWorld(camera, pp.x, pp.y));
         renderInk();
+      } else if (resizing && e.pointerId === resizing.pid) {
+        const w = screenToWorld(camera, pp.x, pp.y);
+        const rect = resizeRect(
+          { x: resizing.ox, y: resizing.oy, w: resizing.ow, h: resizing.oh },
+          resizing.handle,
+          w.x,
+          w.y,
+          e.shiftKey,
+        );
+        const cur = st.board.objects.find((o) => o.id === resizing.id);
+        if (
+          cur &&
+          (cur.x !== rect.x ||
+            cur.y !== rect.y ||
+            cur.w !== rect.w ||
+            cur.h !== rect.h)
+        ) {
+          if (!resizing.moved) {
+            st.pushHistory(); // one undo step per resize drag
+            resizing.moved = true;
+          }
+          st.resizeObject(resizing.id, rect);
+          renderAll();
+        }
       } else if (moving && e.pointerId === moving.pid) {
         const w = screenToWorld(camera, pp.x, pp.y);
         const dx = w.x - moving.lwx;
@@ -606,6 +796,10 @@ export function BoardCanvas({ onEditObject }: BoardCanvasProps) {
             st.addStroke(finished); // pushes history + appends
           }
           renderInk();
+        }
+        if (resizingRef.current && e.pointerId === resizingRef.current.pid) {
+          // History already pushed on the first move; just end the drag.
+          resizingRef.current = null;
         }
         if (movingRef.current && e.pointerId === movingRef.current.pid) {
           const mv = movingRef.current;
