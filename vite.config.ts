@@ -2,6 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
+  // Served from https://jacobanana.github.io/mathboard/ on GitHub Pages.
+  // Use a relative base so built asset URLs work under the repo subpath.
+  base: "./",
   plugins: [react()],
   resolve: {
     alias: {
